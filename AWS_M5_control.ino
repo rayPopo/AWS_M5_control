@@ -9,13 +9,20 @@
 //
 // With M5Stack support library from https://github.com/m5stack/M5Stack 
 // and AWS_IOT library from https://github.com/ExploreEmbedded/Hornbill-Examples/tree/master/arduino-esp32/AWS_IOT
+// NTP time with help of https://github.com/arduino-libraries/NTPClient
 //===============================================================================
 #include <M5Stack.h>
 #include <Free_Fonts.h> 
 #include <AWS_IOT.h>
 #include <WiFi.h>
+#include <NTPClient.h>
 #define ESP32
 #define MAX_RETRIES 128
+#define BUF_SIZE    1024
+// display colors
+#define BKGR_COLOR  TFT_BLUE
+#define OK_COLOR    TFT_GREEN
+#define ERR_COLOR   TFT_RED
 //===============================================================================
 // Private data for connections are stored in another file 
 extern char WIFI_SSID[];      // name of your WiFi network
@@ -26,21 +33,28 @@ extern char TOPIC_NAME[];     // Topic to subscribe to
 //===============================================================================
 // Global variables
 AWS_IOT aws_client;
-int tick=0, msgCount=0, msgReceived = 0;
-char SendBuffer[1024];
-char ReceiveBuffer[1024];
+bool AWS_connected;   // Flag to show AWS connection state
+bool AWS_msg;         // Flag to show incoming message
+char SendBuffer[BUF_SIZE];
+char ReceiveBuffer[BUF_SIZE];
+WiFiUDP ntpUDP;
+NTPClient ntp_client(ntpUDP, "pool.ntp.org", 10800, 60000);
 //===============================================================================
-void mySubCallBackHandler (char *topicName, int payloadLen, char *payLoad)
+void CallbackAWS(char *TopicName, int MsgLen, char *Msg)
 {
-    strncpy(ReceiveBuffer, payLoad, payloadLen);
-    ReceiveBuffer[payloadLen] = 0;
-    msgReceived = 1;
+  if (MsgLen > (BUF_SIZE - 1))
+    DoReset("Incoming message to big");
+  
+  strncpy(ReceiveBuffer, Msg, MsgLen);
+  ReceiveBuffer[MsgLen] = 0;
+  AWS_msg = true;
 }
 //-------------------------------------------------------------------------------
+// Show error message and reset if something went wrong
 void DoReset(char *Message)
 {
-  M5.Lcd.clear(BLUE);
-  M5.Lcd.setTextColor(TFT_RED); 
+  M5.Lcd.clear(BKGR_COLOR);
+  M5.Lcd.setTextColor(ERR_COLOR); 
   M5.Lcd.setCursor(0, 20);
   M5.Lcd.print(Message);
   M5.Lcd.setCursor(0, 40);
@@ -50,12 +64,20 @@ void DoReset(char *Message)
   ESP.restart();
 }
 //-------------------------------------------------------------------------------
+void PrintCurrentTime()
+{
+  M5.Lcd.fillRect(201, 201, 320, 20, BKGR_COLOR);
+  M5.Lcd.setTextColor(OK_COLOR);
+  M5.Lcd.setCursor(200, 220);
+  M5.Lcd.print(ntp_client.getFormattedTime());
+}
+//-------------------------------------------------------------------------------
 void ConnectWiFi()
 {
   int i = 0;
   int retry_cnt = 0;
   
-  M5.Lcd.clear(TFT_BLUE);
+  M5.Lcd.clear(BKGR_COLOR);
   M5.Lcd.setTextColor(TFT_WHITE);
   M5.Lcd.setFreeFont(FM12);
 
@@ -81,11 +103,10 @@ void ConnectWiFi()
     vTaskDelay(1000 / portTICK_RATE_MS); // sleep for 1 second
   }
 
-  M5.Lcd.clear(BLUE);
-  M5.Lcd.setTextColor(TFT_GREEN);
+  M5.Lcd.clear(BKGR_COLOR);
+  M5.Lcd.setTextColor(OK_COLOR);
   M5.Lcd.setCursor(0, 20);
-  strcpy(SendBuffer, "WiFi SSID: ");
-  strcat(SendBuffer, WIFI_SSID);
+  sprintf(SendBuffer, "WiFi SSID: %s", WIFI_SSID);
   M5.Lcd.print(SendBuffer);
 
   // Wait for DHCP IP assignment
@@ -97,95 +118,124 @@ void ConnectWiFi()
     if (retry_cnt > MAX_RETRIES)
       DoReset("DHCP failed");
     M5.Lcd.setCursor(0, 40);
-    strcpy(SendBuffer, "IP addr: ");
-    strcat(SendBuffer, WiFi.localIP().toString().c_str());
+    sprintf(SendBuffer, "IP: %s", WiFi.localIP().toString().c_str());
     M5.Lcd.print(SendBuffer); 
     vTaskDelay(1000 / portTICK_RATE_MS); // sleep for 1 second
   }
-  M5.Lcd.fillRect(0, 21, 320, 20, TFT_BLUE);
-  M5.Lcd.setTextColor(TFT_GREEN);
+  M5.Lcd.fillRect(0, 21, 320, 20, BKGR_COLOR);
+  M5.Lcd.setTextColor(OK_COLOR);
   M5.Lcd.setCursor(0, 40);
-  strcpy(SendBuffer, "IP addr: ");
-  strcat(SendBuffer, WiFi.localIP().toString().c_str());
+  sprintf(SendBuffer, "IP: %s", WiFi.localIP().toString().c_str());
   M5.Lcd.print(SendBuffer);  
+
+  ntp_client.begin();
+}
+//-------------------------------------------------------------------------------
+void ConnectAWS()
+{
+  int res;
+  int retry_cnt = 0;
+
+  M5.Lcd.fillRect(0, 41, 320, 40, BKGR_COLOR);
+  M5.Lcd.setTextColor(OK_COLOR);
+  M5.Lcd.setCursor(0, 60);
+  M5.Lcd.print("AWS connecting"); 
+  res = -1;
+  while (res != 0)
+  {
+    retry_cnt++;
+    PrintCurrentTime();
+    if (retry_cnt > MAX_RETRIES)
+      DoReset("ASW failed");
+    res = aws_client.connect(HOST_ADDRESS, CLIENT_ID);
+
+    M5.Lcd.fillRect(0, 41, 320, 20, BKGR_COLOR);
+    M5.Lcd.setTextColor(ERR_COLOR);
+    M5.Lcd.setCursor(0, 60);
+    sprintf(SendBuffer, "AWS status: 0x%x", res);
+    M5.Lcd.print(SendBuffer); 
+    vTaskDelay(5000 / portTICK_RATE_MS); // sleep for 5 second
+  }
+  M5.Lcd.fillRect(0, 41, 320, 20, BKGR_COLOR);
+  M5.Lcd.setTextColor(OK_COLOR);
+  M5.Lcd.setCursor(0, 60);
+  M5.Lcd.print("AWS connected"); 
+
+  AWS_connected = true;
+
+  res = -1;
+  while (res != 0)
+  {
+    retry_cnt++;
+    PrintCurrentTime();
+    if (retry_cnt > MAX_RETRIES)
+      DoReset("Subscribe failed");
+    res = aws_client.subscribe(TOPIC_NAME, CallbackAWS);
+
+    M5.Lcd.fillRect(0, 61, 320, 20, BKGR_COLOR);
+    M5.Lcd.setTextColor(ERR_COLOR);
+    M5.Lcd.setCursor(0, 80);
+    sprintf(SendBuffer, "Subscr. status: 0x%x", res);
+    M5.Lcd.print(SendBuffer); 
+    vTaskDelay(5000 / portTICK_RATE_MS); // sleep for 5 second
+  }
+  M5.Lcd.fillRect(0, 61, 320, 20, BKGR_COLOR);
+  M5.Lcd.setTextColor(OK_COLOR);
+  M5.Lcd.setCursor(0, 80);
+  sprintf(SendBuffer, "topic: %s", TOPIC_NAME);
+  M5.Lcd.print(SendBuffer); 
 }
 //===============================================================================
 // the setup routine runs once when M5Stack starts up
 void setup()
 {
-  int i = 0;
-  int retry_cnt = 0;
-
-  M5.begin();
+  AWS_connected = false;
+  AWS_msg = false;
   
-//
-//  vTaskDelay(30000 / portTICK_RATE_MS);
-//  i = aws_client.connect(HOST_ADDRESS, CLIENT_ID);
-//
-//  if ( i== 0)
-//  {
-//    M5.Lcd.setCursor(0, 40);
-//    M5.Lcd.print("AWS connected");
-//
-//    i = aws_client.subscribe(TOPIC_NAME, mySubCallBackHandler);
-//    if (i == 0)
-//    {
-//            M5.Lcd.setCursor(0, 60);
-//            M5.Lcd.print("Subscribed");
-//    }
-//    else
-//    {
-//            M5.Lcd.setCursor(0, 60);
-//            M5.Lcd.print("NOT Subscribed");
-//    }
-//  }
-//  else
-//  {
-//    M5.Lcd.setCursor(0, 40);
-//    M5.Lcd.print("AWS connected FAILED");
-//  }
+  M5.begin();
 }
 //===============================================================================
 // the loop routine runs over and over again forever
 void loop() 
-{
+{  
   if (WiFi.status() != WL_CONNECTED)
+  {
+    AWS_connected = false;
+    ntp_client.end();
+    
     ConnectWiFi();
-//  int i;
-//  int ypos = 20;
-//    if(msgReceived == 1)
-//    {
-//        msgReceived = 0;
-//        M5.Lcd.setCursor(160, ypos);
-//        M5.Lcd.print(ReceiveBuffer);
-//        ypos = ypos+20;
-//        if (ypos > 240)
-//        {
-//          ypos = 20;
-//        }
-//    }
-//    vTaskDelay(1000 / portTICK_RATE_MS); 
-//    tick++;
-//
+  }
+  else 
+  { // WiFi Connected
+    ntp_client.update();
+    
+    if (!AWS_connected)
+      ConnectAWS();  
+  }
+
+  if (AWS_msg)
+  {
+    AWS_msg = false;
+    M5.Lcd.fillRect(0, 81, 320, 120, BKGR_COLOR);
+    M5.Lcd.setTextColor(OK_COLOR);
+    M5.Lcd.setCursor(0, 100);
+    sprintf(SendBuffer, "MSG @%s", ntp_client.getFormattedTime());
+    M5.Lcd.print(SendBuffer);
+    M5.Lcd.setCursor(0, 120);
+    M5.Lcd.print(ReceiveBuffer); 
+  }
+
+  PrintCurrentTime();
+  vTaskDelay(1000 / portTICK_RATE_MS);
+
 //  // DEBUG
 //  M5.update();
 //  if (M5.BtnA.wasReleased())
 //  {   
-//    M5.Lcd.clear(BLUE);
 //  }
 //  if (M5.BtnB.wasReleased())
 //  {   
-//    i = aws_client.subscribe(TOPIC_NAME, mySubCallBackHandler);
-//    if (i == 0)
-//    {
-//            M5.Lcd.setCursor(0, 60);
-//            M5.Lcd.print("Subscribed");
-//    }
-//    else
-//    {
-//            M5.Lcd.setCursor(0, 60);
-//            M5.Lcd.print("NOT Subscribed");
-//    }
+
 //  }
 //  if (M5.BtnC.wasReleased())
 //  {   
