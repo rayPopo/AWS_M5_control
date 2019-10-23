@@ -42,7 +42,7 @@ bool AWS_msg;         // Flag to show incoming message
 char SendBuffer[BUF_SIZE];
 char ReceiveBuffer[BUF_SIZE];
 WiFiUDP ntpUDP;
-DynamicJsonDocument json_doc(BUF_SIZE);
+StaticJsonDocument<256> json_doc;
 NTPClient ntp_client(ntpUDP, "pool.ntp.org", 10800, 60000);
 //===============================================================================
 void CallbackAWS(char *TopicName, int MsgLen, char *Msg)
@@ -239,8 +239,8 @@ void loop()
     DeserializationError error = deserializeJson(json_doc, ReceiveBuffer);
     if (error)
       DoReset("JSON failure");
-    data_value = json_doc["data"];
-    sprintf(ReceiveBuffer, "Data: %d", data_value);
+    data_value = json_doc["data"].as<double>();
+    sprintf(ReceiveBuffer, "Data: %f", data_value);
     
     M5.Lcd.setCursor(0, 120);
     M5.Lcd.print(ReceiveBuffer); 
