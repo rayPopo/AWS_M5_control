@@ -9,20 +9,24 @@
 //
 // With M5Stack support library from https://github.com/m5stack/M5Stack 
 // and AWS_IOT library from https://github.com/ExploreEmbedded/Hornbill-Examples/tree/master/arduino-esp32/AWS_IOT
+// JSON is parsed with https://arduinojson.org/
 // NTP time with help of https://github.com/arduino-libraries/NTPClient
 //===============================================================================
 #include <M5Stack.h>
 #include <Free_Fonts.h> 
 #include <AWS_IOT.h>
 #include <WiFi.h>
+#include <ArduinoJson.h>
 #include <NTPClient.h>
+//-------------------------------------------------------------------------------
 #define ESP32
-#define MAX_RETRIES 128
-#define BUF_SIZE    1024
+#define MAX_RETRIES   128
+#define BUF_SIZE      1024
 // display colors
-#define BKGR_COLOR  TFT_BLUE
-#define OK_COLOR    TFT_GREEN
-#define ERR_COLOR   TFT_RED
+#define BKGR_COLOR    TFT_BLUE
+#define OK_COLOR      TFT_GREEN
+#define ERR_COLOR     TFT_RED
+#define LOG_FILE_NAME "/DataLog.txt"
 //===============================================================================
 // Private data for connections are stored in another file 
 extern char WIFI_SSID[];      // name of your WiFi network
@@ -38,6 +42,7 @@ bool AWS_msg;         // Flag to show incoming message
 char SendBuffer[BUF_SIZE];
 char ReceiveBuffer[BUF_SIZE];
 WiFiUDP ntpUDP;
+DynamicJsonDocument json_doc(BUF_SIZE);
 NTPClient ntp_client(ntpUDP, "pool.ntp.org", 10800, 60000);
 //===============================================================================
 void CallbackAWS(char *TopicName, int MsgLen, char *Msg)
@@ -198,6 +203,9 @@ void setup()
 // the loop routine runs over and over again forever
 void loop() 
 {  
+  File log_file;
+  double data_value;
+  
   if (WiFi.status() != WL_CONNECTED)
   {
     AWS_connected = false;
@@ -221,8 +229,29 @@ void loop()
     M5.Lcd.setCursor(0, 100);
     sprintf(SendBuffer, "MSG @%s", ntp_client.getFormattedTime());
     M5.Lcd.print(SendBuffer);
+
+    /////////////////////////////////////////
+    //  Expected Json message have format:
+    //  {
+    //    "data": 48.75608
+    //  }
+    /////////////////////////////////////////
+    DeserializationError error = deserializeJson(json_doc, ReceiveBuffer);
+    if (error)
+      DoReset("JSON failure");
+    data_value = json_doc["data"];
+    sprintf(ReceiveBuffer, "Data: %d", data_value);
+    
     M5.Lcd.setCursor(0, 120);
     M5.Lcd.print(ReceiveBuffer); 
+
+    log_file = SD.open(LOG_FILE_NAME, FILE_WRITE);
+    if (log_file)
+    {
+      log_file.println(SendBuffer);
+      log_file.println(ReceiveBuffer);
+      log_file.close();
+    }
   }
 
   PrintCurrentTime();
