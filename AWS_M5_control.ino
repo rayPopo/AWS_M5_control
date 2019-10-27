@@ -34,6 +34,7 @@ extern char WIFI_PASSWORD[];  // password to WiFi
 extern char HOST_ADDRESS[];   // URL of your AWS endpoint
 extern char CLIENT_ID[];      // I put thing name here
 extern char TOPIC_NAME[];     // Topic to subscribe to
+extern char CMD_TOPIC_NAME[]; // Topic to publish to
 //===============================================================================
 // Global variables
 AWS_IOT aws_client;
@@ -203,6 +204,7 @@ void setup()
 // the loop routine runs over and over again forever
 void loop() 
 {  
+  int res;
   File log_file;
   double data_value;
   
@@ -254,19 +256,30 @@ void loop()
     }
   }
 
+  M5.update();
+  if (M5.BtnA.wasReleased())
+  { // Send ON command  
+    json_doc.clear();
+    json_doc["light_mode"] = 1;
+    serializeJson(json_doc, SendBuffer, BUF_SIZE);
+    res = aws_client.publish(CMD_TOPIC_NAME, SendBuffer);
+    M5.Lcd.fillRect(1, 201, 20, 20, OK_COLOR);
+  }
+  
+  if (M5.BtnB.wasReleased())
+  { // Clear status
+    M5.Lcd.fillRect(1, 201, 20, 20, BKGR_COLOR);
+  }
+  
+  if (M5.BtnC.wasReleased())
+  { // Send OFF command   
+    json_doc.clear();
+    json_doc["light_mode"] = 0;
+    serializeJson(json_doc, SendBuffer, BUF_SIZE);
+    res = aws_client.publish(CMD_TOPIC_NAME, SendBuffer);  
+    M5.Lcd.fillRect(1, 201, 20, 20, ERR_COLOR);
+  }
+
   PrintCurrentTime();
-  vTaskDelay(1000 / portTICK_RATE_MS);
-
-//  // DEBUG
-//  M5.update();
-//  if (M5.BtnA.wasReleased())
-//  {   
-//  }
-//  if (M5.BtnB.wasReleased())
-//  {   
-
-//  }
-//  if (M5.BtnC.wasReleased())
-//  {   
-//  }
+  vTaskDelay(500 / portTICK_RATE_MS);
 }
